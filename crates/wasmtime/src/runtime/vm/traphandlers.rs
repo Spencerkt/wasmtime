@@ -73,6 +73,7 @@ pub(crate) enum TrapTest {
     Trap(Handler),
 }
 
+#[cfg(has_tls)]
 fn lazy_per_thread_init() {
     traphandlers::lazy_per_thread_init();
 }
@@ -106,7 +107,9 @@ fn lazy_per_thread_init() {
 /// have been previously called. Additionally no Rust destructors can be on the
 /// stack. They will be skipped and not executed.
 pub(super) unsafe fn raise_preexisting_trap(store: &mut dyn VMStore) {
-    tls::with(|info| unsafe { info.unwrap().unwind(store) })
+    tls::with(store.vm_store_context_ptr(), |info| unsafe {
+        info.unwrap().unwind(store)
+    })
 }
 
 /// Invokes the closure `f` and handles any error/panic/trap that happens
@@ -156,7 +159,9 @@ where
         if let UnwindReason::Trap(Ok(trap)) = &mut unwind {
             uncaught_exception.apply(&mut trap.reason);
         }
-        tls::with(|info| info.unwrap().record_unwind(unwind));
+        tls::with(store.vm_store_context_ptr(), |info| {
+            info.unwrap().record_unwind(unwind)
+        });
     }
     ret
 }
@@ -663,7 +668,8 @@ mod call_thread_state {
         #[inline]
         pub(crate) unsafe fn push(&self) {
             assert!(self.prev.get().is_null());
-            self.prev.set(tls::raw::replace(self));
+            self.prev
+                .set(tls::raw::replace(self.vm_store_context.get(), self));
         }
 
         /// Pops this `CallThreadState` from the linked list stored in TLS.
@@ -677,7 +683,7 @@ mod call_thread_state {
         #[inline]
         pub(crate) unsafe fn pop(&self) {
             let prev = self.prev.replace(ptr::null());
-            let head = tls::raw::replace(prev);
+            let head = tls::raw::replace(self.vm_store_context.get(), prev);
             assert!(core::ptr::eq(head, self));
         }
 
@@ -1156,8 +1162,8 @@ fn entry_trap_handler(vm_store_context: &VMStoreContext) -> Handler {
 /// A private inner module managing the state of Wasmtime's thread-local storage
 /// (TLS) state.
 ///
-/// Wasmtime at this time has a single pointer of TLS. This single pointer of
-/// TLS is the totality of all TLS required by Wasmtime. By keeping this as
+/// When TLS is used, Wasmtime has a single pointer of TLS for trap handling.
+/// By keeping this as
 /// small as possible it generally makes it easier to integrate with external
 /// systems and implement features such as fiber context switches. This single
 /// TLS pointer is declared in platform-specific modules to handle platform
@@ -1172,10 +1178,11 @@ fn entry_trap_handler(vm_store_context: &VMStoreContext) -> Handler {
 /// This TLS pointer is additionally the head of a linked list of activations
 /// that are all stored on the stack for the current thread. Each time
 /// WebAssembly is recursively invoked by an embedder will push a new entry into
-/// this linked list. This singly-linked list is maintained with its head in TLS
-/// node pointers are stored in `CallThreadState::prev`.
+/// this linked list. This singly-linked list is maintained with its head in TLS;
+/// node pointers are stored in `CallThreadState::prev`. When TLS is not used,
+/// the list head is stored in the store instead.
 ///
-/// An example stack might look like this:
+/// An example stack with TLS might look like this:
 ///
 /// ```text
 /// ┌─────────────────────┐◄───── highest, or oldest, stack address
@@ -1234,15 +1241,17 @@ fn entry_trap_handler(vm_store_context: &VMStoreContext) -> Handler {
 pub(crate) mod tls {
     #[cfg(all(feature = "component-model-async", feature = "gc"))]
     use crate::module::ModuleRegistry;
+    use crate::runtime::vm::VMStoreContext;
     #[cfg(all(feature = "component-model-async", feature = "gc"))]
     use crate::store::StoreOpaque;
+    use core::ptr::NonNull;
 
     use super::CallThreadState;
 
     pub use raw::Ptr;
 
-    // An even *more* inner module for dealing with TLS. This actually has the
-    // thread local variable and has functions to access the variable.
+    // An even *more* inner module for dealing with TLS or the store-local list
+    // head. This has functions to access the head.
     //
     // Note that this is specially done to fully encapsulate that the accessors
     // for tls may or may not be inlined. Wasmtime's async support employs stack
@@ -1257,6 +1266,8 @@ pub(crate) mod tls {
     // these functions are free to be inlined.
     pub(super) mod raw {
         use super::CallThreadState;
+        use crate::runtime::vm::VMStoreContext;
+        use core::ptr::NonNull;
 
         pub type Ptr = *const CallThreadState;
 
@@ -1264,6 +1275,7 @@ pub(crate) mod tls {
             assert!(core::mem::align_of::<CallThreadState>() > 1);
         };
 
+        #[cfg(has_tls)]
         fn tls_get() -> (Ptr, bool) {
             let mut initialized = false;
             let p = crate::runtime::vm::sys::tls_get().map_addr(|a| {
@@ -1273,14 +1285,16 @@ pub(crate) mod tls {
             (p.cast(), initialized)
         }
 
+        #[cfg(has_tls)]
         fn tls_set(ptr: Ptr, initialized: bool) {
             let encoded = ptr.map_addr(|a| a | usize::from(initialized));
             crate::runtime::vm::sys::tls_set(encoded.cast_mut().cast::<u8>());
         }
 
+        #[cfg(has_tls)]
         #[cfg_attr(feature = "async", inline(never))] // see module docs
         #[cfg_attr(not(feature = "async"), inline)]
-        pub fn replace(val: Ptr) -> Ptr {
+        pub fn replace(_store: NonNull<VMStoreContext>, val: Ptr) -> Ptr {
             // When a new value is configured that means that we may be
             // entering WebAssembly so check to see if this thread has
             // performed per-thread initialization for traps.
@@ -1292,8 +1306,23 @@ pub(crate) mod tls {
             prev
         }
 
+        /// Sets the list head for `store` to `val`, returning the previous head.
+        #[cfg(not(has_tls))]
+        #[inline]
+        pub fn replace(store: NonNull<VMStoreContext>, val: Ptr) -> Ptr {
+            // SAFETY: `store` is live and `activation_head` is only accessed
+            // through this module, never across a call.
+            unsafe {
+                let head = (*store.as_ptr()).activation_head.get();
+                let prev = *head;
+                *head = val.expose_provenance();
+                core::ptr::with_exposed_provenance(prev)
+            }
+        }
+
         /// Eagerly initialize thread-local runtime functionality. This will be performed
         /// lazily by the runtime if users do not perform it eagerly.
+        #[cfg(has_tls)]
         #[cfg_attr(feature = "async", inline(never))] // see module docs
         #[cfg_attr(not(feature = "async"), inline)]
         pub fn initialize() {
@@ -1305,9 +1334,27 @@ pub(crate) mod tls {
             tls_set(state, true);
         }
 
+        #[cfg(not(has_tls))]
+        #[inline]
+        pub fn initialize() {}
+
+        #[cfg(has_tls)]
+        #[inline]
+        pub fn get(_store: NonNull<VMStoreContext>) -> Ptr {
+            get_thread()
+        }
+
+        #[cfg(not(has_tls))]
+        #[inline]
+        pub fn get(store: NonNull<VMStoreContext>) -> Ptr {
+            // SAFETY: see `replace`.
+            unsafe { core::ptr::with_exposed_provenance(*(*store.as_ptr()).activation_head.get()) }
+        }
+
+        #[cfg(has_tls)]
         #[cfg_attr(feature = "async", inline(never))] // see module docs
         #[cfg_attr(not(feature = "async"), inline)]
-        pub fn get() -> Ptr {
+        pub fn get_thread() -> Ptr {
             tls_get().0
         }
     }
@@ -1373,7 +1420,9 @@ pub(crate) mod tls {
         pub unsafe fn push(self) -> PreviousAsyncWasmCallState {
             // First save the state of TLS as-is so when this state is popped
             // off later on we know where to stop.
-            let ret = PreviousAsyncWasmCallState { state: raw::get() };
+            let ret = PreviousAsyncWasmCallState {
+                state: raw::get_thread(),
+            };
 
             // The oldest activation, if present, has various `VMStoreContext`
             // fields saved within it. These fields were the state for the
@@ -1417,7 +1466,7 @@ pub(crate) mod tls {
         /// current CallThreadState pointer does not point within the stack
         /// we're leaving (e.g. allocated for a fiber).
         pub fn assert_current_state_not_in_range(range: core::ops::Range<usize>) {
-            let p = raw::get() as usize;
+            let p = raw::get_thread() as usize;
             assert!(!range.contains(&p));
         }
 
@@ -1503,7 +1552,7 @@ pub(crate) mod tls {
                 // returned `AsyncWasmCallState`. Resumption above in
                 // `AsyncWasmCallState::push` will perform the swap back into
                 // the store to hook things up again.
-                let ptr = raw::get();
+                let ptr = raw::get_thread();
                 if ptr == thread_head {
                     unsafe {
                         if let Some(state) = ret.state.as_ref() {
@@ -1538,9 +1587,7 @@ pub(crate) mod tls {
         }
     }
 
-    /// Configures thread local state such that for the duration of the
-    /// execution of `closure` any call to `with` will yield `state`, unless
-    /// this is recursively called again.
+    /// Pushes `state` for the duration of `closure`.
     #[inline]
     pub fn set<R>(state: &mut CallThreadState, closure: impl FnOnce(&CallThreadState) -> R) -> R {
         struct Reset<'a> {
@@ -1563,9 +1610,21 @@ pub(crate) mod tls {
         }
     }
 
-    /// Returns the last pointer configured with `set` above, if any.
-    pub fn with<R>(closure: impl FnOnce(Option<&CallThreadState>) -> R) -> R {
-        let p = raw::get();
+    /// Returns the last pointer configured with `set` for this store, if any.
+    /// With TLS, this may instead belong to another store on the same thread.
+    pub fn with<R>(
+        store: NonNull<VMStoreContext>,
+        closure: impl FnOnce(Option<&CallThreadState>) -> R,
+    ) -> R {
+        let p = raw::get(store);
+        unsafe { closure(if p.is_null() { None } else { Some(&*p) }) }
+    }
+
+    /// Like `with` but for the current thread, for signal handlers which have
+    /// no store in hand.
+    #[cfg(has_tls)]
+    pub fn with_thread<R>(closure: impl FnOnce(Option<&CallThreadState>) -> R) -> R {
+        let p = raw::get_thread();
         unsafe { closure(if p.is_null() { None } else { Some(&*p) }) }
     }
 }

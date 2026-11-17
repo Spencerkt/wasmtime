@@ -5,7 +5,8 @@ extern crate alloc;
 
 use alloc::sync::Arc;
 use wasmtime::{
-    Config, CustomCodeMemory, Engine, Instance, Linker, Module, Result, Store, Trap, ensure,
+    Caller, Config, CustomCodeMemory, Engine, Instance, Linker, Module, Result, Store, Trap,
+    WasmBacktrace, bail, ensure,
 };
 
 mod allocator;
@@ -239,9 +240,31 @@ fn simple_host_fn(module: &[u8]) -> Result<()> {
     let module = deserialize(&engine, module)?;
     let mut linker = Linker::<()>::new(&engine);
     linker.func_wrap("host", "multiply", |a: u32, b: u32| a.saturating_mul(b))?;
+    linker.func_wrap("host", "reenter", |mut caller: Caller<'_, ()>| {
+        let inner = caller.get_export("inner").unwrap().into_func().unwrap();
+        inner.typed::<(), ()>(&caller)?.call(&mut caller, ())
+    })?;
+    linker.func_wrap("host", "fail", || -> Result<()> { bail!("host failure") })?;
     let mut store = Store::new(&engine, ());
     let instance = linker.instantiate(&mut store, &module)?;
     let func = instance.get_typed_func::<(u32, u32, u32), u32>(&mut store, "add_and_mul")?;
+    ensure!(func.call(&mut store, (2, 3, 4))? == 10);
+
+    let nested = instance.get_typed_func::<(), ()>(&mut store, "nested")?;
+    let err = nested.call(&mut store, ()).unwrap_err();
+    ensure!(err.downcast_ref::<Trap>() == Some(&Trap::UnreachableCodeReached));
+    let frames = err.downcast_ref::<WasmBacktrace>().unwrap().frames();
+    ensure!(frames.len() == 2);
+    ensure!(frames[0].func_name() == Some("inner"));
+    ensure!(frames[1].func_name() == Some("nested"));
+
+    let host_error = instance.get_typed_func::<(), ()>(&mut store, "host_error")?;
+    let err = host_error.call(&mut store, ()).unwrap_err();
+    ensure!(err.downcast_ref::<Trap>().is_none());
+    ensure!(format!("{err:?}").contains("host failure"));
+    let frames = err.downcast_ref::<WasmBacktrace>().unwrap().frames();
+    ensure!(frames.len() == 1);
+    ensure!(frames[0].func_name() == Some("host_error"));
     ensure!(func.call(&mut store, (2, 3, 4))? == 10);
     Ok(())
 }

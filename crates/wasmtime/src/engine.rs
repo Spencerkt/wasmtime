@@ -809,6 +809,8 @@ impl Engine {
     /// on calls into WebAssembly. This is provided for use cases where the
     /// latency of WebAssembly calls are extra-important, which is not
     /// necessarily true of all embeddings.
+    ///
+    /// When neither native signals nor `async` are enabled, this is a no-op.
     pub fn tls_eager_initialize() {
         crate::runtime::vm::tls_eager_initialize();
     }

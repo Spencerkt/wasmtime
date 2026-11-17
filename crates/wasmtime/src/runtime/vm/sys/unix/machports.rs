@@ -138,7 +138,7 @@ unsafe extern "C" fn sigbus_handler(
     // If this is a faulting address within the async guard range listed within
     // our tls storage then print a helpful message about it and abort.
     // Otherwise forward to the previous SIGBUS handler, if any.
-    tls::with(|info| {
+    tls::with_thread(|info| {
         let info = match info {
             Some(info) => info,
             None => return,
@@ -459,7 +459,7 @@ unsafe fn handle_exception(request: &mut ExceptionRequest) -> bool {
 /// the backtrace is captured we can do the usual resumption back to the source
 /// of the wasm code.
 unsafe extern "C" fn unwind(pc: usize, fp: usize, fault1: usize, fault2: usize, trap: u8) -> ! {
-    let handler = tls::with(|state| {
+    let handler = tls::with_thread(|state| {
         let state = state.unwrap();
         let regs = TrapRegisters { pc, fp, lr: None };
         let faulting_addr = match fault1 {

@@ -110,8 +110,13 @@ fn main() -> Result<()> {
         br#"
             (module
                 (import "host" "multiply" (func $multiply (param i32 i32) (result i32)))
+                (import "host" "reenter" (func $reenter))
+                (import "host" "fail" (func $fail))
                 (func (export "add_and_mul") (param i32 i32 i32) (result i32)
                     (i32.add (call $multiply (local.get 0) (local.get 1)) (local.get 2)))
+                (func $inner (export "inner") unreachable)
+                (func $nested (export "nested") call $reenter)
+                (func $host_error (export "host_error") call $fail)
             )
         "#,
     )?;
@@ -173,7 +178,8 @@ fn main() -> Result<()> {
                 )
             })?;
 
-        let lib = Library::new(&embedding_so_path).context("failed to create new library")?;
+        let lib = Library::open(Some(&embedding_so_path), RTLD_NOW)
+            .context("failed to create new library")?;
         let run: Symbol<
             extern "C" fn(
                 *mut u8,

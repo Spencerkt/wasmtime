@@ -130,6 +130,8 @@ void wasmtime_memory_image_free(struct wasmtime_memory_image *image) {
 
 #endif // WASMTIME_VIRTUAL_MEMORY
 
+#ifdef WASMTIME_USE_TLS
+
 #ifdef WASMTIME_CUSTOM_SYNC
 
 // Multi-threaded TLS using pthread
@@ -166,6 +168,8 @@ uint8_t *wasmtime_tls_get(size_t slot) { return WASMTIME_TLS[slot]; }
 void wasmtime_tls_set(size_t slot, uint8_t *val) { WASMTIME_TLS[slot] = val; }
 
 #endif
+
+#endif // WASMTIME_USE_TLS
 
 #ifdef WASMTIME_CUSTOM_SYNC
 

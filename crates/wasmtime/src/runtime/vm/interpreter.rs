@@ -1,7 +1,8 @@
 use crate::error::OutOfMemory;
 use crate::runtime::vm::vmcontext::VMArrayCallNative;
 use crate::runtime::vm::{
-    Instance, StoreBox, TrapRegisters, VMContext, VMOpaqueContext, f32x4, f64x2, i8x16, tls,
+    Instance, StoreBox, TrapRegisters, VMContext, VMOpaqueContext, VMStoreContext, f32x4, f64x2,
+    i8x16, tls,
 };
 use crate::{Engine, ValRaw};
 use core::marker;
@@ -482,10 +483,10 @@ impl InterpreterRef<'_> {
     ///
     /// # Safety
     ///
-    /// `caller` must be the valid `VMContext` passed to the `call` that is
-    /// currently executing, and there must be no other active borrows of its
-    /// store (as is the case when wasm traps), since it is used to enter the
-    /// host via `Instance::enter_host_from_wasm`.
+    /// `caller` must be the valid `VMContext` of an instance in the store,
+    /// passed to the `call` that is currently executing. There must be no other
+    /// active borrows of its store (as is the case when wasm traps), since it is
+    /// used to enter the host via `Instance::enter_host_from_wasm`.
     unsafe fn trap(
         &mut self,
         pc: NonNull<u8>,
@@ -549,17 +550,23 @@ impl InterpreterRef<'_> {
             }
         };
 
+        // SAFETY: `caller` points to an instance in the store, and the store
+        // has no other active borrows, per this function's contract.
+        let store_context = unsafe { vm_store_context_of(caller) };
+
         // If the trapping function was called directly by the host then it's
         // the entry trampoline, and the only way it can trap is a stack
         // overflow before it has pushed its frame. It hasn't set up its trap
         // handler, and this activation has no Wasm frames for the backtrace, so
         // record the trap and return to the host directly.
         if lr.is_some() && self.vm().lr_is_host_return() {
-            tls::with(|s| s.unwrap().record_jit_trap(regs.pc, None, trap, None));
+            tls::with(store_context, |s| {
+                s.unwrap().record_jit_trap(regs.pc, None, trap, None)
+            });
             return None;
         }
 
-        let handler = tls::with(|s| {
+        let handler = tls::with(store_context, |s| {
             let s = s.unwrap();
             s.set_jit_trap(regs, None, trap);
             s.entry_trap_handler()
@@ -574,5 +581,25 @@ impl InterpreterRef<'_> {
         let pc = self.vm_state().resume_at_pc.take().unwrap();
         let pc = core::ptr::with_exposed_provenance_mut(pc);
         NonNull::new(pc).unwrap()
+    }
+}
+
+/// Returns the `VMStoreContext` of the store that `vmctx` belongs to.
+///
+/// # Safety
+///
+/// `vmctx` must be a valid `VMContext` whose instance is in a store with no
+/// active mutable borrows.
+#[inline]
+unsafe fn vm_store_context_of(vmctx: NonNull<VMContext>) -> NonNull<VMStoreContext> {
+    // SAFETY: `vmctx` belongs to a live instance, and its store has no active
+    // mutable borrows, per this function's contract.
+    unsafe {
+        Instance::from_vmctx(vmctx)
+            .as_ref()
+            .vm_store_context()
+            .read()
+            .expect("instance has no store")
+            .as_non_null()
     }
 }

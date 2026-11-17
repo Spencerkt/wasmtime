@@ -6,6 +6,7 @@ cfg_select! {
         pub enum SignalHandler {}
 
         #[inline]
+        #[cfg(has_tls)]
         pub fn lazy_per_thread_init() {}
     }
     target_vendor = "apple" => {

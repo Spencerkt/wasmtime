@@ -21,7 +21,7 @@ impl TrapHandler {
 extern "C" fn handle_trap(pc: usize, fp: usize, has_faulting_addr: bool, faulting_addr: usize) {
     use crate::runtime::vm::traphandlers::{TrapRegisters, TrapTest, tls};
 
-    tls::with(|info| {
+    tls::with_thread(|info| {
         let info = match info {
             Some(info) => info,
             None => return,
@@ -43,4 +43,5 @@ extern "C" fn handle_trap(pc: usize, fp: usize, has_faulting_addr: bool, faultin
     })
 }
 
+#[cfg(has_tls)]
 pub fn lazy_per_thread_init() {}

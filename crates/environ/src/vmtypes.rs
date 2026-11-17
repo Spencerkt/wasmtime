@@ -520,6 +520,10 @@ macro_rules! for_each_vm_type {
                 ///
                 /// NB: `UnsafeCell` because JIT code writes to this field.
                 pub lazy_lenders_len: UnsafeCell<usize>,
+
+                /// Youngest activation of this store when TLS is unavailable, or zero.
+                /// Present unconditionally to keep `VMOffsets` unconditional.
+                pub activation_head: UnsafeCell<usize>,
             }
 
             /// JIT-visible representation of the store's current thread for the component

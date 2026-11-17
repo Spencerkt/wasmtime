@@ -34,8 +34,8 @@ The example is organized into a few locations:
 
 Taken together this example is unlikely to satisfy any one individual use case
 but should set up the scaffolding to show how Wasmtime can be built for a
-nonstandard platform. Wasmtime effectively requires one pointer of thread-local
-memory and otherwise all other dependencies can be internalized.
+nonstandard platform. Wasmtime requires thread-local memory when native signal
+support or the `async` feature is enabled; other dependencies can be internalized.
 
 ## Description
 

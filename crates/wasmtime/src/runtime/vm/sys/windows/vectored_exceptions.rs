@@ -200,7 +200,7 @@ unsafe extern "system" fn exception_handler(exception_info: *mut EXCEPTION_POINT
 
     // This is basically the same as the unix version above, only with a
     // few parameters tweaked here and there.
-    tls::with(|info| {
+    tls::with_thread(|info| {
         let info = match info {
             Some(info) => info,
             None => return EXCEPTION_CONTINUE_SEARCH,

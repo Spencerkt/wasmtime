@@ -348,10 +348,9 @@ to operate correctly. The header file at
 symbols that the Wasmtime runtime requires to work which your platform will need
 to provide. Some important notes about this are:
 
-* `wasmtime_tls_{get,set}` are required for the runtime to operate. Effectively
-  a single pointer of TLS storage is necessary. Whether or not this is actually
-  stored in TLS is up to the embedder, for example [storage in `static`
-  memory][tls] is ok if the embedder knows it won't be using threads.
+* `wasmtime_tls_{get,set}` are required when native signal support or the
+  `async` feature is enabled. The embedder may use [static storage][tls] if it
+  knows it won't be using threads.
 
 * `WASMTIME_SIGNALS_BASED_TRAPS` - if this `#define` is given (e.g. the
   `signals-based-traps` feature was enabled at compile time), then your platform

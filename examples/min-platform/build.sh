@@ -22,7 +22,7 @@ EMBEDDING_DIR=$HOST_DIR/embedding
 set -ex
 
 if [ "$WASMTIME_SIGNALS_BASED_TRAPS" = "1" ]; then
-  cflags="$cflags -DWASMTIME_VIRTUAL_MEMORY -DWASMTIME_NATIVE_SIGNALS"
+  cflags="$cflags -DWASMTIME_VIRTUAL_MEMORY -DWASMTIME_NATIVE_SIGNALS -DWASMTIME_USE_TLS"
   features="$features,custom"
 fi
 
@@ -32,6 +32,7 @@ if [ "$WASMTIME_CUSTOM_SYNC" = "1" ]; then
 fi
 
 if [ "$MIN_PLATFORM_EXAMPLE_DISABLE_WASI" != "1" ]; then
+  cflags="$cflags -DWASMTIME_USE_TLS"
   features="$features,wasi"
   cargo build \
       --manifest-path=$REPO_DIR/examples/wasm/Cargo.toml \

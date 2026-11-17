@@ -182,9 +182,14 @@ unsafe extern "C" {
     /// `slot` is passed in.
     ///
     /// The values should default to `NULL`.
+    ///
+    /// Only required with native signal handlers or the `async` feature;
+    /// otherwise Wasmtime keeps this state in the store instead.
+    #[cfg(has_tls)]
     pub fn wasmtime_tls_get(slot: usize) -> *mut u8;
 
     /// Setter for the TLS space described in `wasmtime_tls_get`.
+    #[cfg(has_tls)]
     pub fn wasmtime_tls_set(slot: usize, ptr: *mut u8);
 
     /// Frees a synchronization lock.

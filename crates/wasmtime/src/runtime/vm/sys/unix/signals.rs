@@ -140,7 +140,7 @@ unsafe extern "C" fn trap_handler(
         libc::SIGILL => &raw const PREV_SIGILL,
         _ => panic!("unknown signal: {signum}"),
     };
-    let handled = tls::with(|info| {
+    let handled = tls::with_thread(|info| {
         // If no wasm code is executing, we don't handle this as a wasm
         // trap.
         let info = match info {

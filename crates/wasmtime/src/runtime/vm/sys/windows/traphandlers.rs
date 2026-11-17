@@ -1,3 +1,4 @@
+#[cfg(has_tls)]
 pub fn lazy_per_thread_init() {
     // unused on Windows
 }

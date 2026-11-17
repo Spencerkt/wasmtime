@@ -17,6 +17,7 @@
 // * `WASMTIME_SIGNALS_BASED_TRAPS` - corresponds to `signals-based-traps`
 // * `WASMTIME_CUSTOM_SYNC` - corresponds to `custom-sync-primitives`
 // * `WASMTIME_CUSTOM_FIBER` - corresponds to `custom-fiber`
+// * `WASMTIME_USE_TLS` - required with native signals or `async`
 //
 // Some more information about this header can additionally be found at
 // <https://docs.wasmtime.dev/stability-platform-support.html>.
@@ -240,6 +241,7 @@ extern int32_t wasmtime_memory_image_map_at(struct wasmtime_memory_image *image,
 extern void wasmtime_memory_image_free(struct wasmtime_memory_image *image);
 #endif
 
+#if defined(WASMTIME_USE_TLS)
 /**
  * Wasmtime requires a small amount of TLS to be used at runtime,
  * and this function returns the current value of the TLS state.
@@ -251,13 +253,19 @@ extern void wasmtime_memory_image_free(struct wasmtime_memory_image *image);
  * `slot` is passed in.
  *
  * The values should default to `NULL`.
+ *
+ * Only required with native signal handlers or the `async` feature;
+ * otherwise Wasmtime keeps this state in the store instead.
  */
 extern uint8_t *wasmtime_tls_get(uintptr_t slot);
+#endif
 
+#if defined(WASMTIME_USE_TLS)
 /**
  * Setter for the TLS space described in `wasmtime_tls_get`.
  */
 extern void wasmtime_tls_set(uintptr_t slot, uint8_t *ptr);
+#endif
 
 #if defined(WASMTIME_CUSTOM_SYNC)
 /**
